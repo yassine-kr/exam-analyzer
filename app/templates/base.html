@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Exam Analyzer{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header>
+    <a class="brand" href="/">Exam Analyzer</a>
+    <span class="badge {{ 'secure' if scheme == 'https' else 'insecure' }}">
+      {{ 'HTTPS 🔒' if scheme == 'https' else 'HTTP (not encrypted)' }}
+    </span>
+  </header>
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+  <footer>
+    v{{ version }} · served by container <code>{{ hostname }}</code>
+  </footer>
+</body>
+</html>

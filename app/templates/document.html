@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}{{ doc.title }} · Exam Analyzer{% endblock %}
+{% block content %}
+<p><a href="/">← All documents</a></p>
+<section class="card">
+  <h2>{{ doc.title }}</h2>
+  <dl>
+    <dt>Course</dt><dd>{{ doc.course or '—' }}</dd>
+    <dt>File</dt><dd><a href="/documents/{{ doc.id }}/download">{{ doc.filename }}</a></dd>
+    <dt>Size</dt><dd>{{ (doc.size_bytes / 1024)|round(1) }} KB</dd>
+    <dt>SHA-256</dt><dd><code>{{ doc.sha256 }}</code></dd>
+    <dt>Uploaded</dt><dd>{{ doc.uploaded_at }}</dd>
+    <dt>Status</dt><dd><span class="status {{ doc.status }}">{{ doc.status }}</span></dd>
+  </dl>
+</section>
+
+<section class="card">
+  <h2>Analysis results</h2>
+  <pre>{{ doc.analysis }}</pre>
+</section>
+
+<form action="/documents/{{ doc.id }}/delete" method="post"
+      onsubmit="return confirm('Delete this document?')">
+  <button class="danger" type="submit">Delete document</button>
+</form>
+{% endblock %}

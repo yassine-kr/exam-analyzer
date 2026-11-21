@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <h2>Upload an exam document</h2>
+  <form action="/upload" method="post" enctype="multipart/form-data">
+    <label>Title
+      <input name="title" required placeholder="e.g. Midterm — Cloud Computing">
+    </label>
+    <label>Course (optional)
+      <input name="course" placeholder="e.g. CC-2026">
+    </label>
+    <label>File
+      <input type="file" name="file" required>
+    </label>
+    <p class="hint">Allowed: {{ allowed }} · max {{ max_mb }} MB</p>
+    <button type="submit">Upload &amp; analyze</button>
+  </form>
+</section>
+
+<section class="card">
+  <h2>Documents ({{ docs|length }})</h2>
+  {% if docs %}
+  <table>
+    <thead><tr><th>Title</th><th>Course</th><th>File</th><th>Uploaded (UTC)</th><th>Status</th></tr></thead>
+    <tbody>
+    {% for d in docs %}
+      <tr>
+        <td><a href="/documents/{{ d.id }}">{{ d.title }}</a></td>
+        <td>{{ d.course or '—' }}</td>
+        <td>{{ d.filename }}</td>
+        <td>{{ d.uploaded_at.replace('T', ' ')[:16] }}</td>
+        <td><span class="status {{ d.status }}">{{ d.status }}</span></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="empty">No documents yet. Upload the first one above.</p>
+  {% endif %}
+</section>
+{% endblock %}

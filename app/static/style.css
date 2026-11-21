@@ -1,0 +1,35 @@
+:root {
+  --bg: #f6f7f9; --card: #fff; --text: #1d2330; --muted: #667085;
+  --accent: #2557d6; --border: #e3e6eb; --ok: #1a7f4b; --warn: #b54708; --bad: #c0362c;
+}
+* { box-sizing: border-box; }
+body { margin: 0; font: 15px/1.5 system-ui, sans-serif; background: var(--bg); color: var(--text); }
+header { display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 24px; background: var(--card); border-bottom: 1px solid var(--border); }
+.brand { font-weight: 700; font-size: 18px; color: var(--text); text-decoration: none; }
+main { max-width: 900px; margin: 24px auto; padding: 0 16px; }
+footer { text-align: center; color: var(--muted); font-size: 13px; padding: 24px; }
+.card { background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+  padding: 20px 24px; margin-bottom: 20px; }
+h2 { margin: 0 0 14px; font-size: 18px; }
+label { display: block; margin-bottom: 12px; font-weight: 500; }
+input[type=text], input:not([type]), input[type=file] { display: block; width: 100%;
+  margin-top: 4px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; font: inherit; }
+button { background: var(--accent); color: #fff; border: 0; border-radius: 6px;
+  padding: 9px 16px; font: inherit; font-weight: 600; cursor: pointer; }
+button.danger { background: var(--bad); }
+.hint, .empty { color: var(--muted); font-size: 13px; }
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--border); }
+th { color: var(--muted); font-weight: 500; font-size: 13px; }
+a { color: var(--accent); }
+dl { display: grid; grid-template-columns: 110px 1fr; gap: 6px 12px; margin: 0; }
+dt { color: var(--muted); } dd { margin: 0; word-break: break-all; }
+pre { background: var(--bg); padding: 12px; border-radius: 6px; white-space: pre-wrap; margin: 0; }
+.badge { font-size: 13px; padding: 3px 10px; border-radius: 99px; font-weight: 600; }
+.badge.secure { background: #e3f4ea; color: var(--ok); }
+.badge.insecure { background: #fdecea; color: var(--bad); }
+.status { font-size: 12px; padding: 2px 8px; border-radius: 99px; background: #fff4e5; color: var(--warn); }
+.status.done { background: #e3f4ea; color: var(--ok); }
+@media (max-width: 600px) { table th:nth-child(3), table td:nth-child(3),
+  table th:nth-child(4), table td:nth-child(4) { display: none; } }

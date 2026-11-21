@@ -1,0 +1,23 @@
+# Step 2: app behind an Nginx reverse proxy with HTTPS (self-signed cert)
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    volumes:
+      - app-data:/data
+    # no "ports": the app is only reachable through nginx
+
+  nginx:
+    build: ./nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - certs:/etc/nginx/certs
+    depends_on:
+      - app
+
+volumes:
+  app-data:
+  certs:
