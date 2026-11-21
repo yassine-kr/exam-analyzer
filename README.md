@@ -14,7 +14,7 @@ For now each upload stores the file and shows basic metadata (type, size, word c
 
 ### 0. Launch the EC2 instance
 
-- AMI: **Amazon Linux 2023**, type: `t3.micro` (or `t2.micro`)
+- AMI: **Ubuntu Server 24.04 LTS**, type: `t3.micro` (or `t2.micro`)
 - Key pair: create or reuse one
 - **Security group, inbound rules:**
 
@@ -24,21 +24,16 @@ For now each upload stores the file and shows basic metadata (type, size, word c
 | HTTP  | 80   | 0.0.0.0/0 | step 1 & 2 |
 | HTTPS | 443  | 0.0.0.0/0 | step 2 |
 
-Connect: `ssh -i my-key.pem ec2-user@<PUBLIC_IP>` (or use **EC2 Instance Connect** in the console).
+Connect: `ssh -i my-key.pem ubuntu@<PUBLIC_IP>` (or use **EC2 Instance Connect** in the console).
 
-### 1. Install Docker and Git
+### 1. Install Docker, Docker Compose and Git
 
 ```bash
-sudo dnf install -y docker git
+sudo apt update
+sudo apt install -y docker.io docker-compose-v2 git
 sudo systemctl enable --now docker
-sudo usermod -aG docker ec2-user
+sudo usermod -aG docker ubuntu
 newgrp docker            # apply the group without logging out
-
-# Docker Compose plugin (needed for step 2)
-sudo mkdir -p /usr/local/lib/docker/cli-plugins
-sudo curl -sSL "https://github.com/docker/compose/releases/latest/download/docker-compose-linux-$(uname -m)" \
-  -o /usr/local/lib/docker/cli-plugins/docker-compose
-sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
 
 docker --version && docker compose version
 ```
