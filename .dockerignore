@@ -5,3 +5,4 @@ data/
 nginx/
 docker-compose.yml
 README.md
+.env

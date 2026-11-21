@@ -1,8 +1,7 @@
 FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    DATA_DIR=/data
+    PYTHONUNBUFFERED=1
 
 WORKDIR /srv
 
@@ -11,10 +10,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
 
-# Run as a non-root user; /data holds the SQLite DB and uploaded files
-RUN useradd --create-home appuser && mkdir -p /data && chown appuser /data
+# Run as a non-root user. No local storage: files go to S3, metadata to DynamoDB.
+# AWS credentials come from the EC2 instance IAM role (never baked into the image).
+RUN useradd --create-home appuser
 USER appuser
-VOLUME ["/data"]
 
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=3s \

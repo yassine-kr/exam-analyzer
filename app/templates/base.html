@@ -17,7 +17,8 @@
     {% block content %}{% endblock %}
   </main>
   <footer>
-    v{{ version }} · served by container <code>{{ hostname }}</code>
+    v{{ version }} · served by container <code>{{ hostname }}</code><br>
+    S3: <code>{{ bucket }}</code> · DynamoDB: <code>{{ table_name }}</code> · {{ region }}
   </footer>
 </body>
 </html>

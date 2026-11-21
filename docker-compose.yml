@@ -1,10 +1,10 @@
 # Step 2: app behind an Nginx reverse proxy with HTTPS (self-signed cert)
+# Configuration is read from the .env file (copy .env.example to .env)
 services:
   app:
     build: .
     restart: unless-stopped
-    volumes:
-      - app-data:/data
+    env_file: .env
     # no "ports": the app is only reachable through nginx
 
   nginx:
@@ -19,5 +19,4 @@ services:
       - app
 
 volumes:
-  app-data:
   certs:

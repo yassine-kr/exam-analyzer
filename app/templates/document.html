@@ -7,6 +7,7 @@
   <dl>
     <dt>Course</dt><dd>{{ doc.course or '—' }}</dd>
     <dt>File</dt><dd><a href="/documents/{{ doc.id }}/download">{{ doc.filename }}</a></dd>
+    <dt>Stored in</dt><dd><code>s3://{{ doc.s3_bucket }}/{{ doc.s3_key }}</code></dd>
     <dt>Size</dt><dd>{{ (doc.size_bytes / 1024)|round(1) }} KB</dd>
     <dt>SHA-256</dt><dd><code>{{ doc.sha256 }}</code></dd>
     <dt>Uploaded</dt><dd>{{ doc.uploaded_at }}</dd>

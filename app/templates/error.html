@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}AWS error · Exam Analyzer{% endblock %}
+{% block content %}
+<section class="card error">
+  <h2>Cannot reach AWS</h2>
+  <p>{{ message }}</p>
+  <dl>
+    <dt>Region</dt><dd>{{ region }}</dd>
+    <dt>S3 bucket</dt><dd>{{ bucket }}</dd>
+    <dt>DynamoDB table</dt><dd>{{ table_name }}</dd>
+  </dl>
+  <p class="hint">Check the configuration at <a href="/health/aws">/health/aws</a>.</p>
+</section>
+{% endblock %}

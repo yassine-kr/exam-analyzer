@@ -30,6 +30,8 @@ pre { background: var(--bg); padding: 12px; border-radius: 6px; white-space: pre
 .badge.secure { background: #e3f4ea; color: var(--ok); }
 .badge.insecure { background: #fdecea; color: var(--bad); }
 .status { font-size: 12px; padding: 2px 8px; border-radius: 99px; background: #fff4e5; color: var(--warn); }
+.card.error { border-color: var(--bad); }
+.card.error h2 { color: var(--bad); }
 .status.done { background: #e3f4ea; color: var(--ok); }
 @media (max-width: 600px) { table th:nth-child(3), table td:nth-child(3),
   table th:nth-child(4), table td:nth-child(4) { display: none; } }
