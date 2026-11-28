@@ -2,7 +2,7 @@
 
 A small web application to upload **exam documents** and view their **analysis results**.
 
-- **v0.3 (current):** documents analysed by **Claude Sonnet 5 on Amazon Bedrock**, asynchronously:
+- **v0.3 (current):** documents analysed by **Claude Sonnet 4.6 on Amazon Bedrock**, asynchronously:
   S3 → SQS → Lambda → Bedrock → DynamoDB
 - **v0.2:** documents in **Amazon S3**, metadata in **Amazon DynamoDB**: `git checkout v0.2.0`
 - **v0.1:** standalone version (local SQLite + local files): `git checkout v0.1.0`
@@ -22,7 +22,7 @@ Browser ──HTTP/HTTPS──▶│ [ nginx ] ──▶ [ app container ] ─�
                                         Lambda "exam-processor" ──────────────┘
                                                  │ ⑤ PDF + prompt + JSON schema
                                                  ▼
-                                     Amazon Bedrock: Claude Sonnet 5
+                                     Amazon Bedrock: Claude Sonnet 4.6
 ```
 
 The web app never waits for the AI: it stores the file, answers immediately, and the
@@ -184,11 +184,18 @@ Everything below is in the **same region** as your bucket and table.
 Replace `<name>`, `REGION`, `ACCOUNT_ID`, `BUCKET_NAME`, `TABLE_NAME` with your values.
 
 ### 3.1 Enable the model in Amazon Bedrock
-**Amazon Bedrock → Model catalog → Claude Sonnet 5**: open it in the **Playground** and
+**Amazon Bedrock → Model catalog → Claude Sonnet 4.6**: open it in the **Playground** and
 send any prompt. If Bedrock asks for the Anthropic **use-case form**, fill it in first.
-Note the **model ID** shown in the catalog (`anthropic.claude-sonnet-5`).
 
-Also check your quota: **Service Quotas → Amazon Bedrock**, search *Claude Sonnet 5*
+Claude Sonnet 4.6 is called through a **cross-region inference profile** (Bedrock routes
+the request to a region with capacity):
+
+| Profile ID (`MODEL_ID`) | Routes to |
+|---|---|
+| `eu.anthropic.claude-sonnet-4-6` | EU regions only (data stays in the EU), use it from any EU region |
+| `global.anthropic.claude-sonnet-4-6` | any region in the world (most capacity) |
+
+Also check your quota: **Service Quotas → Amazon Bedrock**, search *Claude Sonnet 4.6*
 (requests per minute and tokens per minute). New accounts can have very low values.
 
 ### 3.2 SQS queues
@@ -238,7 +245,7 @@ no zip, just paste the code.
    | Key | Value |
    |---|---|
    | `DYNAMODB_TABLE` | your table name |
-   | `MODEL_ID` | `anthropic.claude-sonnet-5` |
+   | `MODEL_ID` | `eu.anthropic.claude-sonnet-4-6` |
    | `MIN_SECONDS_PER_DOCUMENT` | `30` (optional rate limit, see 3.6) |
 
 5. **Add trigger → SQS** → `exam-analyzer-jobs-<name>`
@@ -307,7 +314,7 @@ Analysis problems (shown on the document page, details in the Lambda's CloudWatc
 |---|---|
 | Stays `queued` | No S3 event notification / no SQS trigger on the Lambda / wrong prefix (`uploads/`) |
 | `failed: Bedrock AccessDeniedException` | Model access not granted (step 3.1), or `bedrock:InvokeModel` missing in the role |
-| `failed: Bedrock ValidationException ... on-demand throughput isn't supported` | Use the inference profile ID: `MODEL_ID` = `eu.anthropic.claude-sonnet-5` (or `global.anthropic.claude-sonnet-5`) |
+| `failed: Bedrock ValidationException ... on-demand throughput isn't supported` | `MODEL_ID` must be the inference profile (`eu.` or `global.` prefix), not `anthropic.claude-sonnet-4-6` |
 | `failed: Bedrock ResourceNotFoundException` | Wrong `MODEL_ID`, or the model is not offered in your region |
 | Many `retrying` | Bedrock quota reached: lower the trigger concurrency / raise `MIN_SECONDS_PER_DOCUMENT`, or request a quota increase |
 | Lambda log: `AccessDenied ... s3:GetObject` / `dynamodb:UpdateItem` | Placeholders not replaced in `lambda-policy.json` |

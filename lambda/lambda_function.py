@@ -14,7 +14,8 @@ Only uses boto3 (included in the Lambda Python runtime): no layer needed.
 
 Environment variables:
   DYNAMODB_TABLE            (required) table written by the web app
-  MODEL_ID                  (optional) default: anthropic.claude-sonnet-5
+  MODEL_ID                  (optional) default: eu.anthropic.claude-sonnet-4-6
+                            (inference profile: "eu." = EU regions, "global." = any region)
   BEDROCK_REGION            (optional) default: the Lambda's own region
   MIN_SECONDS_PER_DOCUMENT  (optional) default: 0. Rate limit: each Lambda
                             instance handles at most 60 / N documents per
@@ -40,7 +41,7 @@ from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError, ReadTimeoutError
 
 TABLE_NAME = os.environ["DYNAMODB_TABLE"]
-MODEL_ID = os.getenv("MODEL_ID", "anthropic.claude-sonnet-5")
+MODEL_ID = os.getenv("MODEL_ID", "eu.anthropic.claude-sonnet-4-6")
 BEDROCK_REGION = os.getenv("BEDROCK_REGION") or os.environ["AWS_REGION"]
 MIN_SECONDS_PER_DOCUMENT = float(os.getenv("MIN_SECONDS_PER_DOCUMENT", "0"))
 MAX_TOKENS = 16000
@@ -286,13 +287,37 @@ def ask_claude(blocks: list[dict]) -> tuple[dict, dict]:
         "max_tokens": MAX_TOKENS,
         "system": SYSTEM_PROMPT,
         "messages": [{"role": "user", "content": blocks}],
-        "output_config": {
-            "effort": "medium",
-            "format": {"type": "json_schema", "schema": ANALYSIS_SCHEMA},
-        },
+        # Structured outputs: the answer is guaranteed to match the JSON schema
+        "output_config": {"format": {"type": "json_schema", "schema": ANALYSIS_SCHEMA}},
     }
     try:
-        response = bedrock.invoke_model(
+        response = invoke(request)
+    except CannotProcess as exc:
+        if "output_config" not in str(exc):
+            raise
+        # Model without structured outputs: put the schema in the prompt instead
+        log.warning("Structured outputs not supported by %s, using the prompt", MODEL_ID)
+        del request["output_config"]
+        request["system"] = (SYSTEM_PROMPT + "\n\nAnswer with ONLY a JSON object (no markdown) "
+                             "matching this JSON schema:\n" + json.dumps(ANALYSIS_SCHEMA))
+        response = invoke(request)
+
+    message = json.loads(response["body"].read())
+    if message.get("stop_reason") == "refusal":
+        raise CannotProcess("The model refused to analyse this document")
+    if message.get("stop_reason") == "max_tokens":
+        raise CannotProcess("The analysis was too long (max_tokens reached)")
+    text = next((b["text"] for b in message.get("content", []) if b.get("type") == "text"), "")
+    text = text.strip().removeprefix("```json").removesuffix("```").strip()
+    try:
+        return json.loads(text), message.get("usage", {})
+    except json.JSONDecodeError as exc:
+        raise CannotProcess(f"Model returned invalid JSON: {exc}") from exc
+
+
+def invoke(request: dict) -> dict:
+    try:
+        return bedrock.invoke_model(
             modelId=MODEL_ID,
             body=json.dumps(request),
             contentType="application/json",
@@ -307,17 +332,6 @@ def ask_claude(blocks: list[dict]) -> tuple[dict, dict]:
         raise CannotProcess(f"Bedrock {code}: {msg}") from exc
     except (ReadTimeoutError, BotoCoreError) as exc:
         raise RetryLater(f"Bedrock call failed: {exc}") from exc
-
-    message = json.loads(response["body"].read())
-    if message.get("stop_reason") == "refusal":
-        raise CannotProcess("The model refused to analyse this document")
-    if message.get("stop_reason") == "max_tokens":
-        raise CannotProcess("The analysis was too long (max_tokens reached)")
-    text = next((b["text"] for b in message.get("content", []) if b.get("type") == "text"), "")
-    try:
-        return json.loads(text), message.get("usage", {})
-    except json.JSONDecodeError as exc:
-        raise CannotProcess(f"Model returned invalid JSON: {exc}") from exc
 
 
 def set_status(doc_id: str, status: str, **fields) -> None:
