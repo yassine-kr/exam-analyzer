@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block title %}{{ doc.title }} · Exam Analyzer{% endblock %}
+{% block head %}{% if doc.status in ('queued', 'processing', 'retrying') %}<meta http-equiv="refresh" content="5">{% endif %}{% endblock %}
 {% block content %}
 <p><a href="/">← All documents</a></p>
 <section class="card">
@@ -12,12 +13,71 @@
     <dt>SHA-256</dt><dd><code>{{ doc.sha256 }}</code></dd>
     <dt>Uploaded</dt><dd>{{ doc.uploaded_at }}</dd>
     <dt>Status</dt><dd><span class="status {{ doc.status }}">{{ doc.status }}</span></dd>
+    {% if doc.processed_at %}<dt>Processed</dt><dd>{{ doc.processed_at }}</dd>{% endif %}
+    {% if doc.model_id %}<dt>Model</dt><dd><code>{{ doc.model_id }}</code>
+      ({{ doc.input_tokens }} input / {{ doc.output_tokens }} output tokens)</dd>{% endif %}
   </dl>
 </section>
 
 <section class="card">
   <h2>Analysis results</h2>
-  <pre>{{ doc.analysis }}</pre>
+  {% if doc.status == 'queued' %}
+    <p class="empty">Waiting for processing: S3 → SQS → Lambda → Bedrock. This page refreshes every 5 s.</p>
+  {% elif doc.status in ('processing', 'retrying') %}
+    <p class="empty">Claude is analysing the document… This page refreshes every 5 s.</p>
+    {% if doc.error %}<pre>{{ doc.error }}</pre>{% endif %}
+  {% elif doc.status == 'failed' %}
+    <p>The analysis failed:</p>
+    <pre>{{ doc.error }}</pre>
+  {% elif doc.result %}
+    {% set r = doc.result %}
+    <p>{{ r.summary }}</p>
+    <dl>
+      <dt>Exam</dt><dd>{{ r.exam_title }}</dd>
+      <dt>Course</dt><dd>{{ r.course }}</dd>
+      <dt>Language</dt><dd>{{ r.language }}</dd>
+      <dt>Duration</dt><dd>{{ r.duration_minutes }} min (estimated completion: {{ r.estimated_completion_minutes }} min)</dd>
+      <dt>Total points</dt><dd>{{ r.total_points }}</dd>
+      <dt>Difficulty</dt><dd><span class="level {{ r.overall_difficulty }}">{{ r.overall_difficulty }}</span></dd>
+    </dl>
+
+    <h3>Questions ({{ r.questions|length }})</h3>
+    <div class="scroll">
+    <table>
+      <thead><tr><th>#</th><th>Question</th><th>Type</th><th>Points</th><th>Bloom</th><th>Difficulty</th></tr></thead>
+      <tbody>
+      {% for q in r.questions %}
+        <tr>
+          <td>{{ q.number }}</td>
+          <td>{{ q.title }}<br><small class="muted">{{ q.topics|join(', ') }}</small></td>
+          <td>{{ q.type.replace('_', ' ') }}</td>
+          <td>{{ q.points }}</td>
+          <td>{{ q.bloom_level }}</td>
+          <td><span class="level {{ q.difficulty }}">{{ q.difficulty }}</span></td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </div>
+
+    {% if r.topic_coverage %}
+    <h3>Topic coverage</h3>
+    {% set max_pts = r.topic_coverage|map(attribute='points')|max %}
+    {% for t in r.topic_coverage %}
+      <div class="bar-row">
+        <span>{{ t.topic }}</span>
+        <span class="bar"><span style="width: {{ (100 * t.points / max_pts) if max_pts else 0 }}%"></span></span>
+        <span>{{ t.points }} pts</span>
+      </div>
+    {% endfor %}
+    {% endif %}
+
+    {% for title, items in (('Strengths', r.strengths), ('Issues found', r.issues), ('Suggestions', r.suggestions)) %}
+      {% if items %}<h3>{{ title }}</h3><ul>{% for i in items %}<li>{{ i }}</li>{% endfor %}</ul>{% endif %}
+    {% endfor %}
+  {% else %}
+    <pre>{{ doc.analysis or 'No analysis.' }}</pre>
+  {% endif %}
 </section>
 
 <form action="/documents/{{ doc.id }}/delete" method="post"

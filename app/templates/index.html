@@ -28,7 +28,7 @@
         <td><a href="/documents/{{ d.id }}">{{ d.title }}</a></td>
         <td>{{ d.course or '—' }}</td>
         <td>{{ d.filename }}</td>
-        <td>{{ d.uploaded_at.replace('T', ' ')[:16] }}</td>
+        <td>{{ (d.uploaded_at or '').replace('T', ' ')[:16] }}</td>
         <td><span class="status {{ d.status }}">{{ d.status }}</span></td>
       </tr>
     {% endfor %}

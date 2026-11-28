@@ -2,21 +2,31 @@
 
 A small web application to upload **exam documents** and view their **analysis results**.
 
-- **v0.2 (current):** documents stored in **Amazon S3**, metadata in **Amazon DynamoDB**
+- **v0.3 (current):** documents analysed by **Claude (Sonnet) on Amazon Bedrock**, asynchronously:
+  S3 → SQS → Lambda → Bedrock → DynamoDB
+- **v0.2:** documents in **Amazon S3**, metadata in **Amazon DynamoDB**: `git checkout v0.2.0`
 - **v0.1:** standalone version (local SQLite + local files): `git checkout v0.1.0`
-
-The real analysis pipeline will be added in later labs. For now each upload is stored
-and gets basic metadata (type, size, word count for `.txt`).
 
 ```
                        ┌──────────────── EC2 instance (IAM role) ────────────────┐
 Browser ──HTTP/HTTPS──▶│ [ nginx ] ──▶ [ app container ] ──boto3──┐               │
                        └──────────────────────────────────────────┼───────────────┘
-                                                  ┌───────────────┴──────────────┐
-                                                  ▼                              ▼
-                                        S3 bucket: the files        DynamoDB table: metadata
-                                        uploads/<id>.pdf            id, title, course, s3_key, ...
+                                   ① put file    ┌────────────────┴───────────┐ ② item status = "queued"
+                                                 ▼                            ▼
+                                 S3 bucket: uploads/<id>.pdf      DynamoDB table: metadata + analysis
+                                                 │ ③ event notification       ▲
+                                                 ▼                            │ ⑥ status = "done" + result
+                                        SQS queue (+ dead-letter queue)       │
+                                                 │ ④ trigger                  │
+                                                 ▼                            │
+                                        Lambda "exam-processor" ──────────────┘
+                                                 │ ⑤ PDF + prompt + JSON schema
+                                                 ▼
+                                     Amazon Bedrock: Claude Sonnet
 ```
+
+The web app never waits for the AI: it stores the file, answers immediately, and the
+document page refreshes until the Lambda has written the result.
 
 - **Stack:** Python 3.12, FastAPI, boto3, HTML templates
 - **Endpoints:** `/` (UI), `/health` (app up), `/health/aws` (S3 + DynamoDB reachable),
@@ -49,6 +59,7 @@ Browser ──HTTP/HTTPS──▶│ [ nginx ] ──▶ [ app container ] ─�
 
 The policy gives **only** what the app needs: put/get/delete objects under `uploads/` in
 your bucket, and put/get/delete/scan items in the `exam-documents` table.
+If your table is in another region or has another name, also fix the DynamoDB ARN.
 
 ---
 
@@ -167,6 +178,99 @@ Stop everything: `docker compose down`.
 
 ---
 
+## Step 3 — AI analysis: S3 → SQS → Lambda → Bedrock
+
+Everything below is in the **same region** as your bucket and table.
+Replace `<name>`, `REGION`, `ACCOUNT_ID`, `BUCKET_NAME`, `TABLE_NAME` with your values.
+
+### 3.1 Enable the model in Amazon Bedrock
+**Amazon Bedrock → Model catalog → Claude Sonnet 5.5** (`anthropic.claude-sonnet-5-5`).
+The first time an account uses an Anthropic model, Bedrock asks for a short
+**use-case form**: fill it in, then test the model once in the **Playground** with
+any prompt. Access can take a few minutes to become active.
+
+> No access yet? `anthropic.claude-sonnet-5` is open to all accounts: set it as
+> `MODEL_ID` in step 3.5 meanwhile.
+
+### 3.2 SQS queues
+**SQS → Create queue** (type **Standard**), twice:
+
+1. Dead-letter queue: name `exam-analyzer-dlq-<name>`, defaults → **Create**
+2. Main queue: name `exam-analyzer-jobs-<name>`
+   - **Visibility timeout: 5 minutes** (must be ≥ the Lambda timeout)
+   - **Access policy → Advanced:** replace with [`lambda/sqs-access-policy.json`](lambda/sqs-access-policy.json)
+     (fill in `REGION`, `ACCOUNT_ID`, `QUEUE_NAME`, `BUCKET_NAME`): it allows **only your
+     bucket** to send messages
+   - **Dead-letter queue: Enabled** → `exam-analyzer-dlq-<name>`, **Maximum receives: 3**
+   - **Create queue**
+
+### 3.3 S3 event notification
+**S3 → your bucket → Properties → Event notifications → Create event notification**
+- Name `new-upload`, **Prefix** `uploads/`
+- Event types: **All object create events**
+- Destination: **SQS queue** → `exam-analyzer-jobs-<name>` → **Save**
+
+(If saving fails with *Unable to validate destination configurations*, the queue access
+policy is wrong.) S3 sends a test message to the queue; the Lambda ignores it.
+
+### 3.4 IAM role for the Lambda
+**IAM → Roles → Create role** → trusted entity **AWS service → Lambda**
+1. Add the managed policy **`AWSLambdaSQSQueueExecutionRole`** (read the queue + write logs)
+2. Name it `exam-processor-lambda-role` → **Create role**
+3. Open it → **Add permissions → Create inline policy → JSON**: paste
+   [`lambda/lambda-policy.json`](lambda/lambda-policy.json), fill in `BUCKET_NAME`, `REGION`,
+   `ACCOUNT_ID`, `TABLE_NAME` → name it `exam-processor-access`
+
+It can **read** the uploaded files, **update** items, and call Claude on Bedrock
+(`bedrock-mantle:CreateInference`). It cannot delete anything.
+
+### 3.5 Lambda layer + function
+The function uses the **Anthropic Python SDK**, which is not in the Lambda runtime, so it
+is added as a **layer**.
+
+1. Get `anthropic-layer.zip` (≈ 25 MB): download it from the
+   [GitHub release](https://github.com/yassine-kr/exam-analyzer/releases/tag/v0.3.0), or build it on
+   your EC2 instance with `sudo apt install -y python3-pip zip && bash lambda/build-layer.sh`
+2. **Lambda → Layers → Create layer**: name `anthropic-sdk`, upload the zip,
+   compatible runtime **Python 3.12**, architecture **x86_64**
+3. **Lambda → Functions → Create function**
+   - Name `exam-processor-<name>`, runtime **Python 3.12**, architecture **x86_64**
+   - **Execution role → Use an existing role** → `exam-processor-lambda-role`
+4. In the function:
+   - **Code:** replace the content of `lambda_function.py` with
+     [`lambda/lambda_function.py`](lambda/lambda_function.py) → **Deploy**
+   - **Code → Layers → Add a layer → Custom layers** → `anthropic-sdk`, version 1
+   - **Configuration → General configuration:** timeout **3 min**, memory **512 MB**
+   - **Configuration → Environment variables:**
+
+     | Key | Value |
+     |---|---|
+     | `DYNAMODB_TABLE` | your table name |
+     | `MODEL_ID` | `anthropic.claude-sonnet-5-5` |
+
+   - **Add trigger → SQS** → `exam-analyzer-jobs-<name>`, **batch size 1** → **Add**
+
+### 3.6 Test
+1. Upload the exam PDF in the web app: status **queued** → **processing** → **done**
+   (≈ 30–90 s; the page refreshes by itself), then the analysis appears: summary,
+   questions, Bloom level, topic coverage, issues and suggestions.
+2. **DynamoDB → Explore items**: the item now has `analysis_json`, `model_id`,
+   `input_tokens`, `output_tokens`, `processed_at`.
+3. **Lambda → Monitor → View CloudWatch logs**: one log stream per execution.
+
+| Status | Meaning |
+|---|---|
+| `queued` | stored, waiting for the Lambda |
+| `processing` | Lambda is calling Claude |
+| `retrying` | temporary error (throttling…): SQS will deliver the message again |
+| `done` | analysis saved |
+| `failed` | permanent error, message shown on the page (no access to the model, bad file…) |
+
+A document stuck in `queued` means the event never reached the Lambda: check the S3
+event notification, the trigger, and the messages in the queue / dead-letter queue.
+
+---
+
 ## Troubleshooting
 
 The app shows a red **"Cannot reach AWS"** page, and `/health/aws` tells what is wrong:
@@ -182,14 +286,27 @@ The app shows a red **"Cannot reach AWS"** page, and `/health/aws` tells what is
 
 After changing the role or the hop limit, just retry — no restart needed.
 
+Analysis problems (shown on the document page, details in the Lambda's CloudWatch logs):
+
+| Symptom | Fix |
+|---|---|
+| Stays `queued` | No S3 event notification / no SQS trigger on the Lambda / wrong prefix (`uploads/`) |
+| `failed: Bedrock error 403` | Model access not granted (step 3.1), or `bedrock-mantle:CreateInference` missing |
+| `failed: Bedrock error 404` | Wrong `MODEL_ID`, or the model is not offered in your region |
+| Lambda log: `AccessDenied ... s3:GetObject` / `dynamodb:UpdateItem` | Placeholders not replaced in `lambda-policy.json` |
+| Lambda log: `No module named 'anthropic'` | Layer not added to the function |
+| Lambda log: `Task timed out` | Increase the timeout (3 min) and keep the queue visibility timeout above it |
+
 ---
 
 ## Clean up (avoid costs)
 
 1. EC2: **Terminate** the instance
-2. S3: **Empty** then **Delete** the bucket
-3. DynamoDB: **Delete** the table
-4. IAM: delete the role `exam-analyzer-ec2-role`
+2. Lambda: delete the function and the `anthropic-sdk` layer
+3. SQS: delete both queues
+4. S3: **Empty** then **Delete** the bucket
+5. DynamoDB: **Delete** the table
+6. IAM: delete the roles `exam-analyzer-ec2-role` and `exam-processor-lambda-role`
 
 ---
 
@@ -220,6 +337,5 @@ Allowed file types: `.pdf .docx .txt .png .jpg .jpeg`
 
 - [x] v0.1 standalone (SQLite + local files)
 - [x] v0.2 files in S3, metadata in DynamoDB
-- [ ] Real analysis pipeline (`analyze_document` in `app/main.py`)
-- [ ] Asynchronous processing (S3 event → queue → worker / Lambda)
+- [x] v0.3 asynchronous analysis: S3 event → SQS → Lambda → Claude on Bedrock
 - [ ] Deployment on ECS / Fargate

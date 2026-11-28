@@ -1,14 +1,16 @@
-"""Exam Analyzer — v0.2: documents in Amazon S3, metadata in Amazon DynamoDB.
+"""Exam Analyzer — v0.3: documents in Amazon S3, metadata in Amazon DynamoDB,
+analysis done asynchronously by Claude on Amazon Bedrock.
 
-Users upload exam documents; each document gets an analysis record.
-The real analysis/processing pipeline will be plugged in later
-(see `analyze_document`). For now it only extracts basic file metadata.
+The web app only stores the file and creates the item with status "queued".
+S3 then notifies an SQS queue, which triggers the Lambda in `lambda/`:
+it calls Claude and writes the result back into the same DynamoDB item.
 
 AWS credentials are NOT stored in the app: on EC2 they come from the
 instance's IAM role (boto3 finds them automatically).
 """
 
 import hashlib
+import json
 import os
 import socket
 import uuid
@@ -30,7 +32,7 @@ AWS_REGION = os.getenv("AWS_REGION", "eu-central-1")
 S3_PREFIX = os.getenv("S3_PREFIX", "uploads/")
 MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "20"))
 ALLOWED_EXTENSIONS = {".pdf", ".docx", ".txt", ".png", ".jpg", ".jpeg"}
-APP_VERSION = "0.2.0"
+APP_VERSION = "0.3.0"
 
 BASE_DIR = Path(__file__).parent
 app = FastAPI(title="Exam Analyzer", version=APP_VERSION)
@@ -86,26 +88,6 @@ def aws_error_page(request: Request, exc: AWSConfigError):
     )
 
 
-# ---------------------------------------------------------------- analysis
-
-def analyze_document(content: bytes, filename: str, content_type: str | None) -> tuple[str, str]:
-    """Placeholder for the future analysis pipeline.
-
-    Returns (status, analysis_text). Later this will hand the document to
-    a processing service (e.g. a queue + worker, or an AI model).
-    """
-    lines = [
-        f"File type: {content_type or 'unknown'}",
-        f"Size: {len(content) / 1024:.1f} KB",
-    ]
-    if Path(filename).suffix.lower() == ".txt":
-        text = content.decode(errors="ignore")
-        lines.append(f"Words: {len(text.split())}")
-        lines.append(f"Lines: {len(text.splitlines())}")
-    lines.append("Full analysis: not implemented yet (coming in a later lab).")
-    return "pending", "\n".join(lines)
-
-
 # ---------------------------------------------------------------- data access
 
 def list_docs() -> list[dict]:
@@ -116,7 +98,7 @@ def list_docs() -> list[dict]:
         if "LastEvaluatedKey" not in page:
             break
         kwargs["ExclusiveStartKey"] = page["LastEvaluatedKey"]
-    return sorted((normalize(i) for i in items), key=lambda d: d["uploaded_at"], reverse=True)
+    return sorted((normalize(i) for i in items), key=lambda d: d.get("uploaded_at", ""), reverse=True)
 
 
 def get_doc(doc_id: str) -> dict:
@@ -129,7 +111,13 @@ def get_doc(doc_id: str) -> dict:
 def normalize(item: dict) -> dict:
     """DynamoDB returns numbers as Decimal; convert for display/JSON."""
     item = dict(item)
-    item["size_bytes"] = int(item.get("size_bytes", 0))
+    for k in ("size_bytes", "input_tokens", "output_tokens"):
+        if k in item:
+            item[k] = int(item[k])
+    try:  # structured result written by the Lambda
+        item["result"] = json.loads(item["analysis_json"]) if item.get("analysis_json") else None
+    except ValueError:
+        item["result"] = None
     return item
 
 
@@ -183,9 +171,9 @@ async def upload(
         ContentType=content_type, Metadata={"document-id": doc_id},
     )
 
-    # 2) the metadata + analysis results go to DynamoDB
-    #    (if this fails, remove the S3 object so no orphan file stays behind)
-    status, analysis = analyze_document(content, filename, content_type)
+    # 2) the metadata goes to DynamoDB with status "queued"; the Lambda
+    #    (S3 event -> SQS -> Lambda -> Bedrock) fills in the analysis later.
+    #    If this fails, remove the S3 object so no orphan file stays behind.
     try:
         aws_call(table.put_item, Item={
             "id": doc_id,
@@ -198,8 +186,7 @@ async def upload(
             "size_bytes": len(content),
             "sha256": hashlib.sha256(content).hexdigest(),
             "uploaded_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            "status": status,
-            "analysis": analysis,
+            "status": "queued",
         })
     except AWSConfigError:
         try:

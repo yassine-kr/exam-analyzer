@@ -24,7 +24,7 @@ th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--bord
 th { color: var(--muted); font-weight: 500; font-size: 13px; }
 a { color: var(--accent); }
 dl { display: grid; grid-template-columns: 110px 1fr; gap: 6px 12px; margin: 0; }
-dt { color: var(--muted); } dd { margin: 0; word-break: break-all; }
+dt { color: var(--muted); } dd { margin: 0; overflow-wrap: anywhere; }
 pre { background: var(--bg); padding: 12px; border-radius: 6px; white-space: pre-wrap; margin: 0; }
 .badge { font-size: 13px; padding: 3px 10px; border-radius: 99px; font-weight: 600; }
 .badge.secure { background: #e3f4ea; color: var(--ok); }
@@ -35,3 +35,15 @@ pre { background: var(--bg); padding: 12px; border-radius: 6px; white-space: pre
 .status.done { background: #e3f4ea; color: var(--ok); }
 @media (max-width: 600px) { table th:nth-child(3), table td:nth-child(3),
   table th:nth-child(4), table td:nth-child(4) { display: none; } }
+.status.queued, .status.processing { background: #e8f0fe; color: var(--accent); }
+.status.retrying { background: #fff4e5; color: var(--warn); }
+.status.failed { background: #fdecea; color: var(--bad); }
+h3 { font-size: 15px; margin: 18px 0 8px; }
+small.muted, .muted { color: var(--muted); }
+.scroll { overflow-x: auto; }
+.level { font-size: 12px; padding: 1px 7px; border-radius: 99px; background: var(--bg); }
+.level.easy { color: var(--ok); } .level.medium { color: var(--warn); } .level.hard { color: var(--bad); }
+.bar-row { display: grid; grid-template-columns: minmax(90px, 1fr) 2fr 60px; gap: 10px; align-items: center; margin: 4px 0; font-size: 14px; }
+.bar { background: var(--bg); border-radius: 4px; height: 10px; overflow: hidden; }
+.bar > span { display: block; height: 100%; background: var(--accent); }
+ul { margin: 0; padding-left: 20px; } li { margin: 3px 0; }

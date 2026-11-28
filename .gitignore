@@ -4,3 +4,5 @@ data/
 certs/
 .venv/
 .env
+lambda/build/
+lambda/*.zip
