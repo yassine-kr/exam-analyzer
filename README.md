@@ -2,7 +2,8 @@
 
 A small web application to upload **exam documents** and view their **analysis results**.
 
-- **v0.4 (current):** sign-in with **Amazon Cognito** (step 4)
+- **v0.5 (current):** real domain name (Route 53) + trusted **Let's Encrypt** certificate (step 5)
+- **v0.4:** sign-in with **Amazon Cognito** (step 4)
 - **v0.3:** documents analysed by **Claude Sonnet 4.6 on Amazon Bedrock**, asynchronously:
   S3 → SQS → Lambda → Bedrock → DynamoDB
 - **v0.2:** documents in **Amazon S3**, metadata in **Amazon DynamoDB**: `git checkout v0.2.0`
@@ -373,6 +374,63 @@ docker compose up -d --build
 
 ---
 
+## Step 5 — Real domain name + trusted certificate
+
+Replace `https://<PUBLIC_IP>` (self-signed, browser warning) by `https://exam.example.com`
+with a certificate trusted by all browsers (Let's Encrypt, free, renewed automatically).
+
+```
+exam.example.com ──Route 53 A record──▶ Elastic IP ──▶ EC2 [nginx :80/:443] ──▶ app
+                       Let's Encrypt ──http://exam.example.com/.well-known/acme-challenge/…──▶ nginx :80
+```
+
+### 5.1 Elastic IP (fixed public IP)
+**EC2 → Elastic IPs → Allocate Elastic IP address** → select it → **Actions → Associate**
+→ your instance. The instance's public IP is now this address, and it no longer changes
+when the instance is stopped/started.
+
+### 5.2 DNS record
+**Route 53 → Hosted zones → your domain → Create record**
+- Record name: `exam` (→ `exam.example.com`), type **A**
+- Value: the **Elastic IP**, TTL 300 → **Create records**
+
+Check from the instance: `getent hosts exam.example.com` must print the Elastic IP.
+
+### 5.3 Certificate
+Port **80** must stay open to `0.0.0.0/0` (Let's Encrypt checks the domain over HTTP).
+Add to `.env`:
+
+```ini
+DOMAIN=exam.example.com
+LETSENCRYPT_EMAIL=you@example.com
+```
+
+```bash
+git pull
+docker compose up -d --build      # nginx starts with the self-signed certificate
+./get-certificate.sh              # gets the real certificate and restarts nginx
+```
+
+Open **https://exam.example.com**: padlock, no warning. The `certbot` container renews
+the certificate automatically (it is valid 90 days, renewed 30 days before expiry).
+
+### 5.4 Cognito
+**App client → Login pages → Edit**: replace the IP by the domain:
+- Allowed callback URLs: `https://exam.example.com/callback`
+- Allowed sign-out URLs: `https://exam.example.com/`
+
+Nothing to change in the app: it builds these URLs from the address used in the browser.
+From now on, always open the app with the domain (with the IP, Cognito answers
+`redirect_mismatch`).
+
+| Problem | Fix |
+|---|---|
+| `get-certificate.sh`: *Timeout during connect* / *unauthorized* | DNS record wrong or not propagated yet, or port 80 closed in the security group |
+| *too many certificates already issued* | Let's Encrypt limit (5 per domain per week): wait, or test with `--staging` |
+| Still the self-signed certificate | `DOMAIN` in `.env` must equal the certificate name; then `docker compose up -d --force-recreate nginx` |
+
+---
+
 ## Troubleshooting
 
 The app shows a red **"Cannot reach AWS"** page, and `/health/aws` tells what is wrong:
@@ -404,7 +462,7 @@ Analysis problems (shown on the document page, details in the Lambda's CloudWatc
 
 ## Clean up (avoid costs)
 
-1. EC2: **Terminate** the instance
+1. EC2: **Terminate** the instance, then **release the Elastic IP** (charged when not in use) and delete the Route 53 record
 2. Lambda: delete the function
 3. SQS: delete both queues
 4. S3: **Empty** then **Delete** the bucket
@@ -439,6 +497,8 @@ uvicorn app.main:app --reload       # http://localhost:8000
 | `COGNITO_CLIENT_SECRET` | — | App client secret |
 | `COGNITO_DOMAIN` | — | Cognito domain (`https://….auth.<region>.amazoncognito.com`) |
 | `SESSION_SECRET` | random at start | Key that signs the session cookie |
+| `DOMAIN` | — | Domain name for the Let's Encrypt certificate (step 5) |
+| `LETSENCRYPT_EMAIL` | — | E-mail for Let's Encrypt expiry notices |
 
 Allowed file types: `.pdf .docx .txt .png .jpg .jpeg`
 
@@ -448,4 +508,5 @@ Allowed file types: `.pdf .docx .txt .png .jpg .jpeg`
 - [x] v0.2 files in S3, metadata in DynamoDB
 - [x] v0.3 asynchronous analysis: S3 event → SQS → Lambda → Claude on Bedrock
 - [x] v0.4 authentication with Amazon Cognito
+- [x] v0.5 real domain (Route 53) + Let's Encrypt certificate
 - [ ] Deployment on ECS / Fargate

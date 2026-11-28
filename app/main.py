@@ -35,7 +35,7 @@ AWS_REGION = os.getenv("AWS_REGION", "eu-central-1")
 S3_PREFIX = os.getenv("S3_PREFIX", "uploads/")
 MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "20"))
 ALLOWED_EXTENSIONS = {".pdf", ".docx", ".txt", ".png", ".jpg", ".jpeg"}
-APP_VERSION = "0.4.0"
+APP_VERSION = "0.5.0"
 
 BASE_DIR = Path(__file__).parent
 app = FastAPI(title="Exam Analyzer", version=APP_VERSION)

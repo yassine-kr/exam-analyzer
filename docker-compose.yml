@@ -1,4 +1,6 @@
-# Step 2: app behind an Nginx reverse proxy with HTTPS (self-signed cert)
+# Step 2: app behind an Nginx reverse proxy with HTTPS
+#   - no domain: self-signed certificate (browser warning)
+#   - DOMAIN set in .env + ./get-certificate.sh: trusted Let's Encrypt certificate
 # Configuration is read from the .env file (copy .env.example to .env)
 services:
   app:
@@ -10,13 +12,28 @@ services:
   nginx:
     build: ./nginx
     restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN:-}
     ports:
       - "80:80"
       - "443:443"
     volumes:
       - certs:/etc/nginx/certs
+      - letsencrypt:/etc/letsencrypt:ro
+      - certbot-www:/var/www/certbot
     depends_on:
       - app
 
+  # Renews the Let's Encrypt certificate (checks twice a day, renews < 30 days before expiry)
+  certbot:
+    image: certbot/certbot:v3.0.1
+    restart: unless-stopped
+    entrypoint: /bin/sh -c 'trap exit TERM; while :; do certbot renew --webroot -w /var/www/certbot --quiet; sleep 12h & wait $${!}; done'
+    volumes:
+      - letsencrypt:/etc/letsencrypt
+      - certbot-www:/var/www/certbot
+
 volumes:
   certs:
+  letsencrypt:
+  certbot-www:
