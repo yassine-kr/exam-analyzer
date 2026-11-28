@@ -19,11 +19,11 @@
     {
       "Sid": "CallClaudeOnBedrock",
       "Effect": "Allow",
-      "Action": [
-        "bedrock:InvokeModel",
-        "bedrock-mantle:CreateInference"
-      ],
-      "Resource": "*"
+      "Action": "bedrock:InvokeModel",
+      "Resource": [
+        "arn:aws:bedrock:REGION:ACCOUNT_ID:inference-profile/eu.anthropic.claude-sonnet-4-6",
+        "arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-4-6"
+      ]
     }
   ]
 }

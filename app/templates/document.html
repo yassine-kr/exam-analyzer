@@ -11,7 +11,7 @@
     <dt>Stored in</dt><dd><code>s3://{{ doc.s3_bucket }}/{{ doc.s3_key }}</code></dd>
     <dt>Size</dt><dd>{{ (doc.size_bytes / 1024)|round(1) }} KB</dd>
     <dt>SHA-256</dt><dd><code>{{ doc.sha256 }}</code></dd>
-    <dt>Uploaded</dt><dd>{{ doc.uploaded_at }}</dd>
+    <dt>Uploaded</dt><dd>{{ doc.uploaded_at }}{% if doc.uploaded_by %} by {{ doc.uploaded_by }}{% endif %}</dd>
     <dt>Status</dt><dd><span class="status {{ doc.status }}">{{ doc.status }}</span></dd>
     {% if doc.processed_at %}<dt>Processed</dt><dd>{{ doc.processed_at }}</dd>{% endif %}
     {% if doc.model_id %}<dt>Model</dt><dd><code>{{ doc.model_id }}</code>

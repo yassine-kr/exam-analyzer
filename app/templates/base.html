@@ -10,8 +10,14 @@
 <body>
   <header>
     <a class="brand" href="/">Exam Analyzer</a>
-    <span class="badge {{ 'secure' if scheme == 'https' else 'insecure' }}">
-      {{ 'HTTPS 🔒' if scheme == 'https' else 'HTTP (not encrypted)' }}
+    <span class="header-right">
+      {% if user %}
+        <span class="user">{{ user.email or user.username }}</span>
+        <a class="logout" href="/logout">Sign out</a>
+      {% endif %}
+      <span class="badge {{ 'secure' if scheme == 'https' else 'insecure' }}">
+        {{ 'HTTPS 🔒' if scheme == 'https' else 'HTTP (not encrypted)' }}
+      </span>
     </span>
   </header>
   <main>
@@ -20,6 +26,7 @@
   <footer>
     v{{ version }} · served by container <code>{{ hostname }}</code><br>
     S3: <code>{{ bucket }}</code> · DynamoDB: <code>{{ table_name }}</code> · {{ region }}
+    · Auth: {{ 'Amazon Cognito' if auth_enabled else 'disabled' }}
   </footer>
 </body>
 </html>

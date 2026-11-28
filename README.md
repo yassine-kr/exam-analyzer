@@ -2,7 +2,8 @@
 
 A small web application to upload **exam documents** and view their **analysis results**.
 
-- **v0.3 (current):** documents analysed by **Claude Sonnet 4.6 on Amazon Bedrock**, asynchronously:
+- **v0.4 (current):** sign-in with **Amazon Cognito** (step 4)
+- **v0.3:** documents analysed by **Claude Sonnet 4.6 on Amazon Bedrock**, asynchronously:
   S3 → SQS → Lambda → Bedrock → DynamoDB
 - **v0.2:** documents in **Amazon S3**, metadata in **Amazon DynamoDB**: `git checkout v0.2.0`
 - **v0.1:** standalone version (local SQLite + local files): `git checkout v0.1.0`
@@ -230,6 +231,10 @@ policy is wrong.) S3 sends a test message to the queue; the Lambda ignores it.
 It can **read** the uploaded files, **update** items, and call Claude on Bedrock
 (`bedrock:InvokeModel`). It cannot delete anything.
 
+> The Bedrock statement has **two resources**: the `eu.` *inference profile* the Lambda
+> calls, and the model itself in **every** region (`*`), because the profile may run the
+> request in another EU region.
+
 ### 3.5 Lambda function
 The code only uses **boto3**, which is already in the Lambda Python runtime: no layer,
 no zip, just paste the code.
@@ -293,6 +298,80 @@ event notification, the trigger, and the messages in the queue / dead-letter que
 
 ---
 
+## Step 4 — Sign-in with Amazon Cognito
+
+```
+Browser ──/login──▶ app ──302──▶ Cognito sign-in page ──302 /callback?code=…──▶ app
+                                                      app ──code + secret──▶ Cognito /oauth2/token
+                                                      app ◀── ID token (JWT, signed by Cognito)
+app verifies the JWT signature → signed session cookie → the user is signed in
+```
+
+Every page then requires a signed-in user (`/api/*` answers `401`), the header shows the
+user's e-mail with a **Sign out** link, and each document records who uploaded it.
+`/health` stays public. Without the `COGNITO_*` variables the app stays open as before.
+
+> ⚠️ Cognito only accepts **HTTPS** return URLs: do step 2 (Nginx + HTTPS) first.
+
+### 4.1 Create the user pool
+**Amazon Cognito → User pools → Create user pool**
+- Application type: **Traditional web application**, name `exam-analyzer`
+- Sign-in identifiers: **Email**
+- Self-registration: enable it if users may create their own account
+- Required attributes: **email**
+- Return URL: `https://<PUBLIC_IP>/callback`
+- **Create user directory**
+
+### 4.2 Check the app client
+**User pool → App clients → exam-analyzer**
+- Note the **Client ID** and the **Client secret** (*Show client secret*)
+- **Login pages → Managed login pages configuration → Edit**:
+  - Allowed callback URLs: `https://<PUBLIC_IP>/callback`
+  - Allowed sign-out URLs: `https://<PUBLIC_IP>/`
+  - OAuth 2.0 grant type: **Authorization code grant**
+  - OpenID Connect scopes: **OpenID**, **Email**, **Profile**
+
+Also note:
+- **User pool ID** (user pool overview), e.g. `eu-north-1_AbCdEf123`
+- **Domain** (**Branding → Domain**), e.g. `https://eu-north-1abcdef.auth.eu-north-1.amazoncognito.com`
+
+### 4.3 Create a user
+**User pool → Users → Create user**: e-mail and **Set a password**. (Or use *Sign up* on the login page if self-registration is enabled.) The user
+will be asked to change a temporary password at first sign-in.
+
+### 4.4 Configure the app
+Add to `.env` on the EC2 instance:
+
+```ini
+COGNITO_USER_POOL_ID=eu-north-1_AbCdEf123
+COGNITO_CLIENT_ID=<client id>
+COGNITO_CLIENT_SECRET=<client secret>
+COGNITO_DOMAIN=https://eu-north-1abcdef.auth.eu-north-1.amazoncognito.com
+SESSION_SECRET=<output of: openssl rand -hex 32>
+```
+
+```bash
+git pull
+docker compose up -d --build
+```
+
+### 4.5 Test
+1. Open **https://&lt;PUBLIC_IP&gt;** → redirected to the Cognito sign-in page
+2. Sign in → back to the app, your e-mail is in the header
+3. Upload a document → its page shows *Uploaded … by your e-mail*
+4. `curl -k https://localhost/api/documents` → `401` (not signed in)
+5. **Sign out** → back to the sign-in page
+
+| Problem | Fix |
+|---|---|
+| Cognito page says `redirect_mismatch` | The callback URL in the app client must be **exactly** `https://<PUBLIC_IP>/callback`, and you must open the app with that same IP |
+| Public IP changed (instance stopped/started) | Update the callback and sign-out URLs (or use an Elastic IP) |
+| `Token exchange failed: invalid_client` | Wrong client ID / secret in `.env` |
+| `Invalid ID token` | Wrong `COGNITO_USER_POOL_ID` |
+| Signed out after every restart | Set `SESSION_SECRET` in `.env` |
+
+---
+
 ## Troubleshooting
 
 The app shows a red **"Cannot reach AWS"** page, and `/health/aws` tells what is wrong:
@@ -329,7 +408,8 @@ Analysis problems (shown on the document page, details in the Lambda's CloudWatc
 3. SQS: delete both queues
 4. S3: **Empty** then **Delete** the bucket
 5. DynamoDB: **Delete** the table
-6. IAM: delete the roles `exam-analyzer-ec2-role` and `exam-processor-lambda-role`
+6. Cognito: delete the user pool
+7. IAM: delete the roles `exam-analyzer-ec2-role` and `exam-processor-lambda-role`
 
 ---
 
@@ -353,6 +433,11 @@ uvicorn app.main:app --reload       # http://localhost:8000
 | `AWS_REGION`     | `eu-central-1` | Region of the bucket and table |
 | `S3_PREFIX`      | `uploads/`     | Key prefix inside the bucket   |
 | `MAX_UPLOAD_MB`  | `20`           | Max upload size                |
+| `COGNITO_USER_POOL_ID` | — | Enables sign-in when the `COGNITO_*` variables are set (step 4) |
+| `COGNITO_CLIENT_ID` | — | App client ID |
+| `COGNITO_CLIENT_SECRET` | — | App client secret |
+| `COGNITO_DOMAIN` | — | Cognito domain (`https://….auth.<region>.amazoncognito.com`) |
+| `SESSION_SECRET` | random at start | Key that signs the session cookie |
 
 Allowed file types: `.pdf .docx .txt .png .jpg .jpeg`
 
@@ -361,4 +446,5 @@ Allowed file types: `.pdf .docx .txt .png .jpg .jpeg`
 - [x] v0.1 standalone (SQLite + local files)
 - [x] v0.2 files in S3, metadata in DynamoDB
 - [x] v0.3 asynchronous analysis: S3 event → SQS → Lambda → Claude on Bedrock
+- [x] v0.4 authentication with Amazon Cognito
 - [ ] Deployment on ECS / Fargate

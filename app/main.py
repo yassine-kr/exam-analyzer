@@ -23,6 +23,9 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.middleware.sessions import SessionMiddleware
+
+from app import auth
 
 # ---------------------------------------------------------------- config
 
@@ -32,12 +35,20 @@ AWS_REGION = os.getenv("AWS_REGION", "eu-central-1")
 S3_PREFIX = os.getenv("S3_PREFIX", "uploads/")
 MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "20"))
 ALLOWED_EXTENSIONS = {".pdf", ".docx", ".txt", ".png", ".jpg", ".jpeg"}
-APP_VERSION = "0.3.0"
+APP_VERSION = "0.4.0"
 
 BASE_DIR = Path(__file__).parent
 app = FastAPI(title="Exam Analyzer", version=APP_VERSION)
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
+
+# Authentication (Amazon Cognito). Order matters: the session middleware is
+# added last so it runs first and `request.session` exists in require_login.
+auth.check_config()
+app.middleware("http")(auth.require_login)
+app.add_middleware(SessionMiddleware, secret_key=auth.SESSION_SECRET,
+                   session_cookie="exam_session", same_site="lax", max_age=8 * 3600)
+app.include_router(auth.router)
 
 s3 = boto3.client("s3", region_name=AWS_REGION)
 table = boto3.resource("dynamodb", region_name=AWS_REGION).Table(DYNAMODB_TABLE or "unset")
@@ -132,6 +143,8 @@ def common_context(request: Request) -> dict:
         "bucket": S3_BUCKET or "—",
         "table_name": DYNAMODB_TABLE or "—",
         "region": AWS_REGION,
+        "user": auth.current_user(request),
+        "auth_enabled": auth.AUTH_ENABLED,
     }
 
 
@@ -146,6 +159,7 @@ def index(request: Request):
 
 @app.post("/upload")
 async def upload(
+    request: Request,
     title: str = Form(...),
     course: str = Form(""),
     file: UploadFile = File(...),
@@ -186,6 +200,7 @@ async def upload(
             "size_bytes": len(content),
             "sha256": hashlib.sha256(content).hexdigest(),
             "uploaded_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "uploaded_by": (auth.current_user(request) or {}).get("email", "anonymous"),
             "status": "queued",
         })
     except AWSConfigError:
