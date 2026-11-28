@@ -10,12 +10,17 @@ For each uploaded document the function:
   4. saves the structured result in the item and marks it "done"
      (or "failed" with the error message)
 
-Environment variables:
-  DYNAMODB_TABLE  (required) table written by the web app
-  MODEL_ID        (optional) default: anthropic.claude-sonnet-5-5
-  BEDROCK_REGION  (optional) default: the Lambda's own region
+Only uses boto3 (included in the Lambda Python runtime): no layer needed.
 
-Handler: lambda_function.lambda_handler   (needs the "anthropic" layer)
+Environment variables:
+  DYNAMODB_TABLE            (required) table written by the web app
+  MODEL_ID                  (optional) default: anthropic.claude-sonnet-5
+  BEDROCK_REGION            (optional) default: the Lambda's own region
+  MIN_SECONDS_PER_DOCUMENT  (optional) default: 0. Rate limit: each Lambda
+                            instance handles at most 60 / N documents per
+                            minute (total = that x SQS trigger max concurrency)
+
+Handler: lambda_function.lambda_handler
 """
 
 import base64
@@ -30,14 +35,14 @@ import zipfile
 from datetime import datetime, timezone
 from pathlib import PurePosixPath
 
-import anthropic
 import boto3
-from anthropic import AnthropicBedrockMantle
-from botocore.exceptions import ClientError
+from botocore.config import Config
+from botocore.exceptions import BotoCoreError, ClientError, ReadTimeoutError
 
 TABLE_NAME = os.environ["DYNAMODB_TABLE"]
-MODEL_ID = os.getenv("MODEL_ID", "anthropic.claude-sonnet-5-5")
+MODEL_ID = os.getenv("MODEL_ID", "anthropic.claude-sonnet-5")
 BEDROCK_REGION = os.getenv("BEDROCK_REGION") or os.environ["AWS_REGION"]
+MIN_SECONDS_PER_DOCUMENT = float(os.getenv("MIN_SECONDS_PER_DOCUMENT", "0"))
 MAX_TOKENS = 16000
 
 log = logging.getLogger()
@@ -45,8 +50,21 @@ log.setLevel(logging.INFO)
 
 s3 = boto3.client("s3")
 table = boto3.resource("dynamodb").Table(TABLE_NAME)
-# Uses the Lambda execution role's credentials (SigV4), no API key needed.
-claude = AnthropicBedrockMantle(aws_region=BEDROCK_REGION, max_retries=3)
+bedrock = boto3.client(
+    "bedrock-runtime",
+    region_name=BEDROCK_REGION,
+    config=Config(
+        read_timeout=150,  # the analysis can take more than the default 60 s
+        # "adaptive" retries ThrottlingException with back-off and slows the client down
+        retries={"mode": "adaptive", "max_attempts": 4},
+    ),
+)
+
+# Bedrock error codes that are worth retrying later (quota / capacity)
+TRANSIENT_ERRORS = {
+    "ThrottlingException", "ServiceUnavailableException", "ModelNotReadyException",
+    "InternalServerException", "ModelTimeoutException", "ServiceQuotaExceededException",
+}
 
 
 class RetryLater(Exception):
@@ -148,7 +166,14 @@ def lambda_handler(event, context):
         for s3_record in body.get("Records", []):
             bucket = s3_record["s3"]["bucket"]["name"]
             key = urllib.parse.unquote_plus(s3_record["s3"]["object"]["key"])
-            process_document(bucket, key)
+            started = time.monotonic()
+            try:
+                process_document(bucket, key)
+            finally:
+                # Simple rate limit: never take less than MIN_SECONDS_PER_DOCUMENT
+                wait = MIN_SECONDS_PER_DOCUMENT - (time.monotonic() - started)
+                if wait > 0:
+                    time.sleep(wait)
     return {"status": "ok"}
 
 
@@ -191,13 +216,13 @@ def process_document(bucket: str, key: str) -> None:
             ":j": json.dumps(result, ensure_ascii=False),
             ":m": MODEL_ID,
             ":p": now(),
-            ":i": usage.input_tokens,
-            ":o": usage.output_tokens,
+            ":i": usage.get("input_tokens", 0),
+            ":o": usage.get("output_tokens", 0),
         },
         ConditionExpression="attribute_exists(id)",  # document deleted meanwhile
     )
     log.info("Document %s done (%s in / %s out tokens)",
-             doc_id, usage.input_tokens, usage.output_tokens)
+             doc_id, usage.get("input_tokens"), usage.get("output_tokens"))
 
 
 # ------------------------------------------------------------------ steps
@@ -255,33 +280,42 @@ def docx_text(content: bytes) -> str:
     return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
-def ask_claude(blocks: list[dict]) -> tuple[dict, object]:
+def ask_claude(blocks: list[dict]) -> tuple[dict, dict]:
+    request = {
+        "anthropic_version": "bedrock-2023-05-31",
+        "max_tokens": MAX_TOKENS,
+        "system": SYSTEM_PROMPT,
+        "messages": [{"role": "user", "content": blocks}],
+        "output_config": {
+            "effort": "medium",
+            "format": {"type": "json_schema", "schema": ANALYSIS_SCHEMA},
+        },
+    }
     try:
-        with claude.messages.stream(
-            model=MODEL_ID,
-            max_tokens=MAX_TOKENS,
-            system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": blocks}],
-            output_config={
-                "effort": "medium",
-                "format": {"type": "json_schema", "schema": ANALYSIS_SCHEMA},
-            },
-        ) as stream:
-            message = stream.get_final_message()
-    except (anthropic.RateLimitError, anthropic.InternalServerError,
-            anthropic.APIConnectionError) as exc:
-        raise RetryLater(f"Bedrock temporarily unavailable: {exc}") from exc
-    except anthropic.APIStatusError as exc:
-        # 400 bad request, 403 no model access / missing IAM permission, 404 wrong model id...
-        raise CannotProcess(f"Bedrock error {exc.status_code}: {exc.message}") from exc
+        response = bedrock.invoke_model(
+            modelId=MODEL_ID,
+            body=json.dumps(request),
+            contentType="application/json",
+            accept="application/json",
+        )
+    except ClientError as exc:
+        code = exc.response["Error"]["Code"]
+        msg = exc.response["Error"].get("Message", "")
+        if code in TRANSIENT_ERRORS:
+            raise RetryLater(f"Bedrock {code}: {msg}") from exc
+        # AccessDeniedException (no model access / IAM), ValidationException, ResourceNotFound...
+        raise CannotProcess(f"Bedrock {code}: {msg}") from exc
+    except (ReadTimeoutError, BotoCoreError) as exc:
+        raise RetryLater(f"Bedrock call failed: {exc}") from exc
 
-    if message.stop_reason == "refusal":
+    message = json.loads(response["body"].read())
+    if message.get("stop_reason") == "refusal":
         raise CannotProcess("The model refused to analyse this document")
-    if message.stop_reason == "max_tokens":
+    if message.get("stop_reason") == "max_tokens":
         raise CannotProcess("The analysis was too long (max_tokens reached)")
-    text = next((b.text for b in message.content if b.type == "text"), "")
+    text = next((b["text"] for b in message.get("content", []) if b.get("type") == "text"), "")
     try:
-        return json.loads(text), message.usage
+        return json.loads(text), message.get("usage", {})
     except json.JSONDecodeError as exc:
         raise CannotProcess(f"Model returned invalid JSON: {exc}") from exc
 

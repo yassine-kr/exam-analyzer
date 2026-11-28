@@ -2,7 +2,7 @@
 
 A small web application to upload **exam documents** and view their **analysis results**.
 
-- **v0.3 (current):** documents analysed by **Claude (Sonnet) on Amazon Bedrock**, asynchronously:
+- **v0.3 (current):** documents analysed by **Claude Sonnet 5 on Amazon Bedrock**, asynchronously:
   S3 → SQS → Lambda → Bedrock → DynamoDB
 - **v0.2:** documents in **Amazon S3**, metadata in **Amazon DynamoDB**: `git checkout v0.2.0`
 - **v0.1:** standalone version (local SQLite + local files): `git checkout v0.1.0`
@@ -22,7 +22,7 @@ Browser ──HTTP/HTTPS──▶│ [ nginx ] ──▶ [ app container ] ─�
                                         Lambda "exam-processor" ──────────────┘
                                                  │ ⑤ PDF + prompt + JSON schema
                                                  ▼
-                                     Amazon Bedrock: Claude Sonnet
+                                     Amazon Bedrock: Claude Sonnet 5
 ```
 
 The web app never waits for the AI: it stores the file, answers immediately, and the
@@ -184,13 +184,12 @@ Everything below is in the **same region** as your bucket and table.
 Replace `<name>`, `REGION`, `ACCOUNT_ID`, `BUCKET_NAME`, `TABLE_NAME` with your values.
 
 ### 3.1 Enable the model in Amazon Bedrock
-**Amazon Bedrock → Model catalog → Claude Sonnet 5.5** (`anthropic.claude-sonnet-5-5`).
-The first time an account uses an Anthropic model, Bedrock asks for a short
-**use-case form**: fill it in, then test the model once in the **Playground** with
-any prompt. Access can take a few minutes to become active.
+**Amazon Bedrock → Model catalog → Claude Sonnet 5**: open it in the **Playground** and
+send any prompt. If Bedrock asks for the Anthropic **use-case form**, fill it in first.
+Note the **model ID** shown in the catalog (`anthropic.claude-sonnet-5`).
 
-> No access yet? `anthropic.claude-sonnet-5` is open to all accounts: set it as
-> `MODEL_ID` in step 3.5 meanwhile.
+Also check your quota: **Service Quotas → Amazon Bedrock**, search *Claude Sonnet 5*
+(requests per minute and tokens per minute). New accounts can have very low values.
 
 ### 3.2 SQS queues
 **SQS → Create queue** (type **Standard**), twice:
@@ -201,7 +200,7 @@ any prompt. Access can take a few minutes to become active.
    - **Access policy → Advanced:** replace with [`lambda/sqs-access-policy.json`](lambda/sqs-access-policy.json)
      (fill in `REGION`, `ACCOUNT_ID`, `QUEUE_NAME`, `BUCKET_NAME`): it allows **only your
      bucket** to send messages
-   - **Dead-letter queue: Enabled** → `exam-analyzer-dlq-<name>`, **Maximum receives: 3**
+   - **Dead-letter queue: Enabled** → `exam-analyzer-dlq-<name>`, **Maximum receives: 5**
    - **Create queue**
 
 ### 3.3 S3 event notification
@@ -222,35 +221,51 @@ policy is wrong.) S3 sends a test message to the queue; the Lambda ignores it.
    `ACCOUNT_ID`, `TABLE_NAME` → name it `exam-processor-access`
 
 It can **read** the uploaded files, **update** items, and call Claude on Bedrock
-(`bedrock-mantle:CreateInference`). It cannot delete anything.
+(`bedrock:InvokeModel`). It cannot delete anything.
 
-### 3.5 Lambda layer + function
-The function uses the **Anthropic Python SDK**, which is not in the Lambda runtime, so it
-is added as a **layer**.
+### 3.5 Lambda function
+The code only uses **boto3**, which is already in the Lambda Python runtime: no layer,
+no zip, just paste the code.
 
-1. Get `anthropic-layer.zip` (≈ 25 MB): download it from the
-   [GitHub release](https://github.com/yassine-kr/exam-analyzer/releases/tag/v0.3.0), or build it on
-   your EC2 instance with `sudo apt install -y python3-pip zip && bash lambda/build-layer.sh`
-2. **Lambda → Layers → Create layer**: name `anthropic-sdk`, upload the zip,
-   compatible runtime **Python 3.12**, architecture **x86_64**
-3. **Lambda → Functions → Create function**
-   - Name `exam-processor-<name>`, runtime **Python 3.12**, architecture **x86_64**
+1. **Lambda → Functions → Create function**
+   - Name `exam-processor-<name>`, runtime **Python 3.12**
    - **Execution role → Use an existing role** → `exam-processor-lambda-role`
-4. In the function:
-   - **Code:** replace the content of `lambda_function.py` with
-     [`lambda/lambda_function.py`](lambda/lambda_function.py) → **Deploy**
-   - **Code → Layers → Add a layer → Custom layers** → `anthropic-sdk`, version 1
-   - **Configuration → General configuration:** timeout **3 min**, memory **512 MB**
-   - **Configuration → Environment variables:**
+2. **Code:** replace the content of `lambda_function.py` with
+   [`lambda/lambda_function.py`](lambda/lambda_function.py) → **Deploy**
+3. **Configuration → General configuration:** timeout **3 min**, memory **512 MB**
+4. **Configuration → Environment variables:**
 
-     | Key | Value |
-     |---|---|
-     | `DYNAMODB_TABLE` | your table name |
-     | `MODEL_ID` | `anthropic.claude-sonnet-5-5` |
+   | Key | Value |
+   |---|---|
+   | `DYNAMODB_TABLE` | your table name |
+   | `MODEL_ID` | `anthropic.claude-sonnet-5` |
+   | `MIN_SECONDS_PER_DOCUMENT` | `30` (optional rate limit, see 3.6) |
 
-   - **Add trigger → SQS** → `exam-analyzer-jobs-<name>`, **batch size 1** → **Add**
+5. **Add trigger → SQS** → `exam-analyzer-jobs-<name>`
+   - **Batch size: 1**
+   - **Maximum concurrency: 2** (at most 2 documents analysed at the same time)
+   - **Add**
 
-### 3.6 Test
+### 3.6 Rate limiting (Bedrock quotas and throttling)
+Uploads can arrive in bursts (a whole class at once), but Bedrock accepts a limited
+number of requests/tokens per minute. The queue absorbs the burst; the Lambda drains
+it at a controlled speed:
+
+| Setting | Where | Effect |
+|---|---|---|
+| **Maximum concurrency = 2** | SQS trigger | at most 2 Lambdas run at once; the other messages wait in the queue |
+| `MIN_SECONDS_PER_DOCUMENT = 30` | Lambda env var | each Lambda handles at most 1 document every 30 s |
+| Throttled anyway | automatic | boto3 retries with back-off; then the status becomes `retrying` and SQS re-delivers the message after the visibility timeout (5 min), up to 5 times, then the dead-letter queue |
+
+**Max documents per minute = maximum concurrency × 60 / MIN_SECONDS_PER_DOCUMENT**
+(2 × 60 / 30 = **4 per minute**). Keep the Lambda timeout above
+`MIN_SECONDS_PER_DOCUMENT` + the analysis time.
+
+> Don't use *reserved concurrency = 1* on the function for this: SQS would keep
+> getting throttled by Lambda and push messages to the dead-letter queue.
+> *Maximum concurrency* on the trigger is the right tool (minimum value: 2).
+
+### 3.7 Test
 1. Upload the exam PDF in the web app: status **queued** → **processing** → **done**
    (≈ 30–90 s; the page refreshes by itself), then the analysis appears: summary,
    questions, Bloom level, topic coverage, issues and suggestions.
@@ -291,10 +306,11 @@ Analysis problems (shown on the document page, details in the Lambda's CloudWatc
 | Symptom | Fix |
 |---|---|
 | Stays `queued` | No S3 event notification / no SQS trigger on the Lambda / wrong prefix (`uploads/`) |
-| `failed: Bedrock error 403` | Model access not granted (step 3.1), or `bedrock-mantle:CreateInference` missing |
-| `failed: Bedrock error 404` | Wrong `MODEL_ID`, or the model is not offered in your region |
+| `failed: Bedrock AccessDeniedException` | Model access not granted (step 3.1), or `bedrock:InvokeModel` missing in the role |
+| `failed: Bedrock ValidationException ... on-demand throughput isn't supported` | Use the inference profile ID: `MODEL_ID` = `eu.anthropic.claude-sonnet-5` (or `global.anthropic.claude-sonnet-5`) |
+| `failed: Bedrock ResourceNotFoundException` | Wrong `MODEL_ID`, or the model is not offered in your region |
+| Many `retrying` | Bedrock quota reached: lower the trigger concurrency / raise `MIN_SECONDS_PER_DOCUMENT`, or request a quota increase |
 | Lambda log: `AccessDenied ... s3:GetObject` / `dynamodb:UpdateItem` | Placeholders not replaced in `lambda-policy.json` |
-| Lambda log: `No module named 'anthropic'` | Layer not added to the function |
 | Lambda log: `Task timed out` | Increase the timeout (3 min) and keep the queue visibility timeout above it |
 
 ---
@@ -302,7 +318,7 @@ Analysis problems (shown on the document page, details in the Lambda's CloudWatc
 ## Clean up (avoid costs)
 
 1. EC2: **Terminate** the instance
-2. Lambda: delete the function and the `anthropic-sdk` layer
+2. Lambda: delete the function
 3. SQS: delete both queues
 4. S3: **Empty** then **Delete** the bucket
 5. DynamoDB: **Delete** the table

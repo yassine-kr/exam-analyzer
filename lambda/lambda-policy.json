@@ -10,13 +10,19 @@
     {
       "Sid": "UpdateDocumentMetadata",
       "Effect": "Allow",
-      "Action": ["dynamodb:GetItem", "dynamodb:UpdateItem"],
+      "Action": [
+        "dynamodb:GetItem",
+        "dynamodb:UpdateItem"
+      ],
       "Resource": "arn:aws:dynamodb:REGION:ACCOUNT_ID:table/TABLE_NAME"
     },
     {
       "Sid": "CallClaudeOnBedrock",
       "Effect": "Allow",
-      "Action": "bedrock-mantle:CreateInference",
+      "Action": [
+        "bedrock:InvokeModel",
+        "bedrock-mantle:CreateInference"
+      ],
       "Resource": "*"
     }
   ]
