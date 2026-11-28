@@ -62,7 +62,9 @@ def explain_aws_error(exc: Exception) -> str:
             "ResourceNotFoundException": f"Table '{DYNAMODB_TABLE}' not found in {AWS_REGION}.",
             "ValidationException": "Table key must be 'id' (String).",
         }
-        return f"{code}: {hints.get(code, exc.response['Error'].get('Message', ''))}"
+        aws_message = exc.response.get("Error", {}).get("Message", "")
+        hint = hints.get(code)
+        return f"{code}: {hint} AWS says: {aws_message}" if hint else f"{code}: {aws_message}"
     return str(exc)
 
 
