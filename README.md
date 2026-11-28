@@ -329,7 +329,7 @@ user's e-mail with a **Sign out** link, and each document records who uploaded i
   - Allowed callback URLs: `https://<PUBLIC_IP>/callback`
   - Allowed sign-out URLs: `https://<PUBLIC_IP>/`
   - OAuth 2.0 grant type: **Authorization code grant**
-  - OpenID Connect scopes: **OpenID**, **Email**, **Profile**
+  - OpenID Connect scopes: **OpenID** and **Email** (at least)
 
 Also note:
 - **User pool ID** (user pool overview), e.g. `eu-north-1_AbCdEf123`
@@ -366,6 +366,7 @@ docker compose up -d --build
 |---|---|
 | Cognito page says `redirect_mismatch` | The callback URL in the app client must be **exactly** `https://<PUBLIC_IP>/callback`, and you must open the app with that same IP |
 | Public IP changed (instance stopped/started) | Update the callback and sign-out URLs (or use an Elastic IP) |
+| `Cognito error: invalid_scope` | App client → Login pages → Edit: enable the **OpenID** and **Email** scopes |
 | `Token exchange failed: invalid_client` | Wrong client ID / secret in `.env` |
 | `Invalid ID token` | Wrong `COGNITO_USER_POOL_ID` |
 | Signed out after every restart | Set `SESSION_SECRET` in `.env` |

@@ -15,6 +15,7 @@ Environment variables:
   COGNITO_CLIENT_SECRET  app client secret ("Traditional web application" clients have one)
   COGNITO_DOMAIN         e.g. https://eu-north-1abcdef.auth.eu-north-1.amazoncognito.com
   SESSION_SECRET         random string used to sign the session cookie
+  COGNITO_SCOPES         (optional) default "openid email"
 """
 
 import base64
@@ -39,7 +40,8 @@ SESSION_SECRET = os.getenv("SESSION_SECRET") or secrets.token_urlsafe(32)
 AUTH_ENABLED = bool(CLIENT_ID)
 POOL_REGION = USER_POOL_ID.split("_")[0]
 ISSUER = f"https://cognito-idp.{POOL_REGION}.amazonaws.com/{USER_POOL_ID}"
-SCOPES = "openid email profile"
+# Must be allowed in the app client (Login pages -> OpenID Connect scopes)
+SCOPES = os.getenv("COGNITO_SCOPES", "openid email")
 
 # Pages reachable without being signed in
 PUBLIC_PATHS = ("/login", "/callback", "/logout", "/health", "/static/")
